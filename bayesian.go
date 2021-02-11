@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 )
 
@@ -37,6 +38,7 @@ type Classifier struct {
 	datas           map[Class]*classData
 	tfIdf           bool
 	DidConvertTfIdf bool // we can't classify a TF-IDF classifier if we haven't yet
+	Filler     []string
 	// called ConverTermsFreqToTfIdf
 }
 
@@ -150,6 +152,7 @@ func NewClassifier(classes ...Class) (c *Classifier) {
 		datas:           make(map[Class]*classData, n),
 		tfIdf:           false,
 		DidConvertTfIdf: false,
+		Filler: []string{},
 	}
 	for _, class := range classes {
 		c.datas[class] = newClassData()
@@ -176,7 +179,7 @@ func NewClassifierFromReader(r io.Reader) (c *Classifier, err error) {
 	w := new(serializableClassifier)
 	err = dec.Decode(w)
 
-	return &Classifier{w.Classes, w.Learned, int32(w.Seen), w.Datas, w.TfIdf, w.DidConvertTfIdf}, err
+	return &Classifier{w.Classes, w.Learned, int32(w.Seen), w.Datas, w.TfIdf, w.DidConvertTfIdf,[]string{},}, err
 }
 
 // getPriors returns the prior probabilities for the
@@ -236,6 +239,48 @@ func (c *Classifier) Observe(word string, count int, which Class) {
 	data := c.datas[which]
 	data.Freqs[word] += float64(count)
 	data.Total += count
+}
+
+// In a learned string there will be filler words (a, and, the, etc) clear those out
+
+func (c *Classifier) FillerWords (filler []string){
+
+	c.Filler = filler
+
+}
+
+func (c *Classifier) removeFiller(doc []string) (out []string){
+
+     for _,d := range doc {
+        ok := true
+     	for _,w := range c.Filler {
+
+			if (w == strings.Trim(d," ")) {
+
+                  ok = false
+
+			}
+
+		}
+        if(ok == true) {
+			out = append(out, d)
+		}
+     }
+
+	 return out
+
+
+}
+
+func (c *Classifier) LearnString(sent string,which Class) {
+
+	//remove filler here
+
+	sl := c.removeFiller(toSlice(sent))
+
+
+	c.Learn(sl,which)
+
 }
 
 // Learn will accept new training documents for
@@ -306,6 +351,22 @@ func (c *Classifier) ConvertTermsFreqToTfIdf() {
 
 }
 
+
+func (c *Classifier) Likely(doc string) (cls Class,scores []float64, inx int, strict bool) {
+
+	scores, inx,strict = c.LogScores(
+		toSlice(doc),
+	)
+
+	cls = c.Classes[inx]
+
+	return cls,scores,inx,strict
+
+}
+
+
+
+
 // LogScores produces "log-likelihood"-like scores that can
 // be used to classify documents into classes.
 //
@@ -329,6 +390,10 @@ func (c *Classifier) LogScores(document []string) (scores []float64, inx int, st
 	if c.tfIdf && !c.DidConvertTfIdf {
 		panic("Using a TF-IDF classifier. Please call ConvertTermsFreqToTfIdf before calling LogScores.")
 	}
+
+	document = c.removeFiller(document)
+
+	//fmt.Println(strings.Join(document," "))
 
 	n := len(c.Classes)
 	scores = make([]float64, n, n)
@@ -554,4 +619,10 @@ func findMax(scores []float64) (inx int, strict bool) {
 		}
 	}
 	return
+}
+
+func toSlice(str string) ([]string){
+
+	return strings.Split(str," ")
+
 }
